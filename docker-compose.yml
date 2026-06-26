@@ -1,0 +1,58 @@
+# ForgeOS development stack: Postgres + Traefik.
+#
+# Usage:
+#   docker compose up -d
+#   cp .env.example .env   # edit DATABASE_URL/JWT_SECRET as needed
+#   go run ./cmd/server     # API on :8081, Traefik on :80, dashboard on :8080
+#
+# The ForgeOS API server itself runs on the host (not in a container) so it can
+# access the Docker socket directly for managing app containers.
+
+services:
+  # ── PostgreSQL ────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: forgeos
+      POSTGRES_PASSWORD: forgeos
+      POSTGRES_DB: forgeos
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forgeos"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+    networks:
+      - forgeos
+
+  # ── Traefik reverse proxy ─────────────────────────────────────────────
+  traefik:
+    image: traefik:v3.3
+    command:
+      - "--api.insecure=true"             # dashboard on :8080 (dev only)
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=forgeos"
+      - "--entrypoints.web.address=:80"
+      - "--log.level=INFO"
+    ports:
+      - "80:80"      # app traffic
+      - "8080:8080"  # Traefik dashboard (insecure, dev only)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - forgeos
+
+volumes:
+  pgdata:
+
+networks:
+  forgeos:
+    name: forgeos
+    driver: bridge

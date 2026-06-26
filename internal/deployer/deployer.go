@@ -1,0 +1,203 @@
+// Package deployer orchestrates rolling out an app image: it creates a
+// deployment record, stops any previous replicas, starts the requested number
+// of new replicas on the shared network with Traefik routing labels, waits for
+// them to reach a running state, then records them and marks the deployment
+// live. On failure the new replicas are cleaned up and the deployment is marked
+// failed, leaving any prior version untouched.
+//
+// This sprint implements a "stop old, start new" flow (no traffic overlap).
+// A true zero-downtime, health-gated rollout arrives in a later sprint.
+package deployer
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/google/uuid"
+
+	"forgeos/internal/container"
+	"forgeos/internal/models"
+	"forgeos/internal/router"
+	"forgeos/internal/store"
+)
+
+// readinessTimeout is how long we wait for a started container to report
+// "running" before declaring the deployment failed.
+const readinessTimeout = 60 * time.Second
+
+// Deployer coordinates the container manager, Traefik label generator, and DB.
+type Deployer struct {
+	containers *container.Manager
+	router     *router.Traefik
+	store      *store.Store
+	logger     *log.Logger
+}
+
+// New returns a wired Deployer.
+func New(containers *container.Manager, rt *router.Traefik, st *store.Store, logger *log.Logger) *Deployer {
+	if logger == nil {
+		logger = log.Default()
+	}
+	return &Deployer{containers: containers, router: rt, store: st, logger: logger}
+}
+
+// DeployImage rolls out an image for an app. It returns the created deployment.
+// The app is expected to be already loaded and authorized by the caller.
+func (d *Deployer) DeployImage(ctx context.Context, app *models.App, imageRef string) (*models.Deployment, error) {
+	if imageRef == "" {
+		return nil, errors.New("image reference is required")
+	}
+
+	deployment, err := d.store.Deploy.CreateDeployment(ctx, app.ID, imageRef)
+	if err != nil {
+		return nil, fmt.Errorf("create deployment: %w", err)
+	}
+
+	d.logger.Printf("deploying app=%s version=%d image=%s", app.Slug, deployment.Version, imageRef)
+
+	// Best-effort: mark the app as deploying so the UI reflects in-progress work.
+	_ = d.store.Apps.SetStatus(ctx, app.UserID, app.ID, models.AppStatusDeploying)
+
+	// Stop + remove any existing replicas for this app (old version).
+	oldRows, _ := d.store.Deploy.ListRunningContainersByApp(ctx, app.ID)
+	if errs := d.containers.RemoveByApp(ctx, app.Slug); len(errs) > 0 {
+		// Non-fatal: we still want to bring the new version up.
+		for _, e := range errs {
+			d.logger.Printf("warn: cleanup old containers app=%s: %v", app.Slug, e)
+		}
+	}
+	for _, c := range oldRows {
+		_ = d.store.Deploy.SetContainerStatus(ctx, c.ID, models.ContainerStatusStopped)
+	}
+
+	// Start the new replicas.
+	created, err := d.startReplicas(ctx, app, deployment.ID, imageRef)
+	if err != nil {
+		// Roll back the new containers and record failure; old version already
+		// gone, but at least we don't leave half-started replicas around.
+		d.cleanupCreated(ctx, created)
+		_ = d.store.Deploy.MarkFailed(ctx, deployment.ID, err.Error())
+		_ = d.store.Apps.SetStatus(ctx, app.UserID, app.ID, models.AppStatusError)
+		return deployment, fmt.Errorf("start replicas: %w", err)
+	}
+
+	// Wait for each new replica to reach "running".
+	for _, c := range created {
+		if err := d.containers.WaitForRunning(ctx, c.ID, readinessTimeout); err != nil {
+			d.cleanupCreated(ctx, created)
+			_ = d.store.Deploy.MarkFailed(ctx, deployment.ID,
+				fmt.Sprintf("replica %s not running: %v", c.Name, err))
+			_ = d.store.Apps.SetStatus(ctx, app.UserID, app.ID, models.AppStatusError)
+			return deployment, fmt.Errorf("replica readiness: %w", err)
+		}
+	}
+
+	// Persist the new container rows and flip the deployment + app to live.
+	now := time.Now()
+	for i := range created {
+		c := created[i]
+		row := &models.Container{
+			ID: uuid.NewString(), AppID: app.ID, DeploymentID: deployment.ID,
+			ContainerID: c.ID, Name: c.Name, Status: models.ContainerStatusRunning,
+			PortMapping: c.HostPort, StartedAt: &now,
+		}
+		if err := d.store.Deploy.CreateContainer(ctx, row); err != nil {
+			d.logger.Printf("warn: record container row app=%s name=%s: %v", app.Slug, c.Name, err)
+		}
+	}
+
+	if err := d.store.Deploy.MarkLive(ctx, deployment.ID); err != nil {
+		d.logger.Printf("warn: mark deployment live app=%s: %v", app.Slug, err)
+	}
+	if err := d.store.Apps.SetStatus(ctx, app.UserID, app.ID, models.AppStatusLive); err != nil {
+		d.logger.Printf("warn: set app live app=%s: %v", app.Slug, err)
+	}
+
+	d.logger.Printf("deploy complete app=%s version=%d replicas=%d", app.Slug, deployment.Version, len(created))
+	return deployment, nil
+}
+
+// startReplicas brings up the requested number of containers for the app and
+// returns the high-level container views (already started). On partial failure
+// it returns the containers created so far plus the error so the caller can
+// clean them up.
+func (d *Deployer) startReplicas(ctx context.Context, app *models.App, deploymentID, imageRef string) ([]*container.Container, error) {
+	replicas := app.Replicas
+	if replicas < 1 {
+		replicas = 1
+	}
+	created := make([]*container.Container, 0, replicas)
+	for i := 0; i < replicas; i++ {
+		labels := d.router.Labels(router.LabelConfig{
+			Slug: app.Slug, Port: app.Port, Replica: i,
+		})
+		c, err := d.containers.Create(ctx, container.ContainerConfig{
+			AppID:       app.Slug,
+			Image:       imageRef,
+			Port:        app.Port,
+			EnvVars:     nil, // env-var injection arrives with the env-var sprint
+			MemoryLimit: app.MemoryLimit,
+			CPUShares:   app.CPULimit,
+			Labels:      labels,
+		})
+		if err != nil {
+			return created, fmt.Errorf("replica %d: %w", i, err)
+		}
+		created = append(created, c)
+	}
+	return created, nil
+}
+
+// cleanupCreated stops and removes a set of containers, ignoring per-container
+// errors so one failure doesn't abort cleanup of the rest.
+func (d *Deployer) cleanupCreated(ctx context.Context, created []*container.Container) {
+	for _, c := range created {
+		if err := d.containers.Stop(ctx, c.ID, 5); err != nil {
+			d.logger.Printf("warn: stop during cleanup name=%s: %v", c.Name, err)
+		}
+		if err := d.containers.Remove(ctx, c.ID); err != nil {
+			d.logger.Printf("warn: remove during cleanup name=%s: %v", c.Name, err)
+		}
+	}
+}
+
+// StopApp gracefully stops all running replicas of an app and updates DB state.
+func (d *Deployer) StopApp(ctx context.Context, app *models.App) error {
+	rows, err := d.store.Deploy.ListRunningContainersByApp(ctx, app.ID)
+	if err != nil {
+		return fmt.Errorf("list running containers: %w", err)
+	}
+	var firstErr error
+	for _, c := range rows {
+		if err := d.containers.Stop(ctx, c.ContainerID, 10); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		_ = d.containers.Remove(ctx, c.ContainerID)
+		_ = d.store.Deploy.SetContainerStatus(ctx, c.ID, models.ContainerStatusStopped)
+	}
+	_ = d.store.Apps.SetStatus(ctx, app.UserID, app.ID, models.AppStatusStopped)
+	return firstErr
+}
+
+// StopAppWithCtx is the server.AppLifecycle adapter for StopApp.
+func (d *Deployer) StopAppWithCtx(ctx context.Context, app *models.App) error {
+	return d.StopApp(ctx, app)
+}
+
+// DeleteApp removes all containers and (via the store) the app row + children.
+func (d *Deployer) DeleteApp(ctx context.Context, app *models.App) error {
+	if errs := d.containers.RemoveByApp(ctx, app.Slug); len(errs) > 0 {
+		for _, e := range errs {
+			d.logger.Printf("warn: remove containers app=%s: %v", app.Slug, e)
+		}
+	}
+	return d.store.Apps.Delete(ctx, app.UserID, app.ID)
+}
+
+// DeleteAppWithCtx is the server.AppLifecycle adapter for DeleteApp.
+func (d *Deployer) DeleteAppWithCtx(ctx context.Context, app *models.App) error {
+	return d.DeleteApp(ctx, app)
+}
