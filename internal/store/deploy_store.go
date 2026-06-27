@@ -36,12 +36,23 @@ func (s *DeployStore) CreateDeployment(ctx context.Context, appID, imageTag stri
 	}
 
 	d := &models.Deployment{AppID: appID, ImageTag: imageTag, Status: models.DeploymentStatusDeploying}
+
+	// Compute the next per-app version number inside the transaction so
+	// concurrent deploys get distinct, monotonic versions. The `version`
+	// column is NOT NULL with no default, so we must supply it explicitly.
+	if err := tx.QueryRow(ctx,
+		`SELECT COALESCE(MAX(version), 0) + 1 FROM deployments WHERE app_id = $1`,
+		appID,
+	).Scan(&d.Version); err != nil {
+		return nil, fmt.Errorf("compute version: %w", err)
+	}
+
 	const q = `
-		INSERT INTO deployments (app_id, image_tag, status, started_at)
-		VALUES ($1, $2, $3, NOW())
-		RETURNING id, version, is_current, started_at, created_at`
-	err = tx.QueryRow(ctx, q, appID, imageTag, d.Status).Scan(
-		&d.ID, &d.Version, &d.IsCurrent, &d.StartedAt, &d.CreatedAt,
+		INSERT INTO deployments (app_id, version, image_tag, status, started_at)
+		VALUES ($1, $2, $3, $4, NOW())
+		RETURNING id, is_current, started_at, created_at`
+	err = tx.QueryRow(ctx, q, appID, d.Version, imageTag, d.Status).Scan(
+		&d.ID, &d.IsCurrent, &d.StartedAt, &d.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert deployment: %w", mapPgErr(err))

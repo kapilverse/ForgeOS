@@ -256,7 +256,7 @@ func (m *Manager) hostPort(ctx context.Context, containerID string, port int) (i
 	}
 	for _, bindings := range inspect.NetworkSettings.Ports {
 		for _, b := range bindings {
-			if strings.HasSuffix(b.HostPort, "") || b.HostPort == "" {
+			if b.HostPort == "" {
 				continue
 			}
 			// We did not publish ports (traffic flows via Traefik over the
