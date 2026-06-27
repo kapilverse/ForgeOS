@@ -24,3 +24,6 @@ Thumbs.db
 
 # Build artifacts
 /tmp/
+
+# Windows reserved filenames that tools sometimes create by accident
+nul
