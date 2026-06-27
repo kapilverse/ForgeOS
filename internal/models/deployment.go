@@ -26,8 +26,16 @@ type Deployment struct {
 }
 
 // DeployRequest is the body for POST /apps/:id/deploy.
-// Either Image (deploy a pre-built Docker image) is required for this
-// increment. Repo-based builds arrive in a later sprint.
+//
+// Two deploy modes:
+//   - Image mode: supply Image to deploy a pre-built Docker image directly.
+//   - Build mode: supply RepoURL to clone a git repo, auto-generate a
+//     Dockerfile, build the image, then deploy. Branch is optional
+//     (defaults to the app's configured branch or "main").
+//
+// If neither field is supplied, the app's stored DockerImage / RepoURL is used.
 type DeployRequest struct {
-	Image string `json:"image"`
+	Image   string `json:"image"`
+	RepoURL string `json:"repo_url"`
+	Branch  string `json:"branch"`
 }
