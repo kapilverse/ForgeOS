@@ -19,6 +19,8 @@ type App struct {
 	Slug        string    `json:"slug"`
 	Description string    `json:"description"`
 	DockerImage string    `json:"docker_image,omitempty"`
+	RepoURL     string    `json:"repo_url,omitempty"`
+	Branch      string    `json:"branch,omitempty"`
 	Status      string    `json:"status"`
 	Replicas    int       `json:"replicas"`
 	CPULimit    int       `json:"cpu_limit"`
@@ -34,6 +36,8 @@ type CreateAppRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	DockerImage string `json:"docker_image"`
+	RepoURL     string `json:"repo_url"`
+	Branch      string `json:"branch"`
 	Replicas    *int   `json:"replicas"`
 	CPULimit    *int   `json:"cpu_limit"`
 	MemoryLimit *int   `json:"memory_limit"`
