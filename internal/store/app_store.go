@@ -22,30 +22,41 @@ func NewAppStore(pool *pgxpool.Pool) *AppStore {
 // Create inserts a new app owned by userID.
 func (s *AppStore) Create(ctx context.Context, a *models.App) error {
 	const q = `
-		INSERT INTO apps (id, user_id, name, slug, description, docker_image,
+		INSERT INTO apps (id, user_id, name, slug, description, docker_image, repo_url, branch,
 		                  status, replicas, cpu_limit, memory_limit, port, health_check)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING created_at, updated_at`
 	err := s.pool.QueryRow(ctx, q,
-		a.ID, a.UserID, a.Name, a.Slug, a.Description, a.DockerImage,
+		a.ID, a.UserID, a.Name, a.Slug, a.Description, a.DockerImage, a.RepoURL, a.Branch,
 		a.Status, a.Replicas, a.CPULimit, a.MemoryLimit, a.Port, a.HealthCheck,
 	).Scan(&a.CreatedAt, &a.UpdatedAt)
 	return mapPgErr(err)
+}
+
+// appColumns is the shared SELECT column list for the apps table. Every query
+// that returns app rows uses this and scanApp, so adding a column is a single
+// edit. Order MUST match scanApp.
+const appColumns = `id, user_id, name, slug, description, docker_image, repo_url, branch,
+                    status, replicas, cpu_limit, memory_limit, port, health_check, created_at, updated_at`
+
+// scanApp scans one app row in appColumns order.
+func scanApp(scanner interface{ Scan(...any) error }) (*models.App, error) {
+	a := &models.App{}
+	if err := scanner.Scan(
+		&a.ID, &a.UserID, &a.Name, &a.Slug, &a.Description, &a.DockerImage, &a.RepoURL, &a.Branch,
+		&a.Status, &a.Replicas, &a.CPULimit, &a.MemoryLimit, &a.Port, &a.HealthCheck, &a.CreatedAt, &a.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	return a, nil
 }
 
 // GetByID loads an app, scoped to userID so a user can never read another
 // user's app. Returns ErrNotFound if the app doesn't exist or is owned by
 // someone else.
 func (s *AppStore) GetByID(ctx context.Context, userID, id string) (*models.App, error) {
-	a := &models.App{}
-	const q = `
-		SELECT id, user_id, name, slug, description, docker_image, status,
-		       replicas, cpu_limit, memory_limit, port, health_check, created_at, updated_at
-		FROM apps WHERE id = $1 AND user_id = $2`
-	err := s.pool.QueryRow(ctx, q, id, userID).Scan(
-		&a.ID, &a.UserID, &a.Name, &a.Slug, &a.Description, &a.DockerImage, &a.Status,
-		&a.Replicas, &a.CPULimit, &a.MemoryLimit, &a.Port, &a.HealthCheck, &a.CreatedAt, &a.UpdatedAt,
-	)
+	q := `SELECT ` + appColumns + ` FROM apps WHERE id = $1 AND user_id = $2`
+	a, err := scanApp(s.pool.QueryRow(ctx, q, id, userID))
 	if err != nil {
 		return nil, mapPgErr(err)
 	}
@@ -54,15 +65,8 @@ func (s *AppStore) GetByID(ctx context.Context, userID, id string) (*models.App,
 
 // GetBySlug loads an app by its URL slug (globally unique).
 func (s *AppStore) GetBySlug(ctx context.Context, slug string) (*models.App, error) {
-	a := &models.App{}
-	const q = `
-		SELECT id, user_id, name, slug, description, docker_image, status,
-		       replicas, cpu_limit, memory_limit, port, health_check, created_at, updated_at
-		FROM apps WHERE slug = $1`
-	err := s.pool.QueryRow(ctx, q, slug).Scan(
-		&a.ID, &a.UserID, &a.Name, &a.Slug, &a.Description, &a.DockerImage, &a.Status,
-		&a.Replicas, &a.CPULimit, &a.MemoryLimit, &a.Port, &a.HealthCheck, &a.CreatedAt, &a.UpdatedAt,
-	)
+	q := `SELECT ` + appColumns + ` FROM apps WHERE slug = $1`
+	a, err := scanApp(s.pool.QueryRow(ctx, q, slug))
 	if err != nil {
 		return nil, mapPgErr(err)
 	}
@@ -71,10 +75,7 @@ func (s *AppStore) GetBySlug(ctx context.Context, slug string) (*models.App, err
 
 // ListByUser returns all apps owned by userID, newest first.
 func (s *AppStore) ListByUser(ctx context.Context, userID string) ([]*models.App, error) {
-	const q = `
-		SELECT id, user_id, name, slug, description, docker_image, status,
-		       replicas, cpu_limit, memory_limit, port, health_check, created_at, updated_at
-		FROM apps WHERE user_id = $1 ORDER BY created_at DESC`
+	q := `SELECT ` + appColumns + ` FROM apps WHERE user_id = $1 ORDER BY created_at DESC`
 	rows, err := s.pool.Query(ctx, q, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list apps: %w", err)
@@ -83,11 +84,8 @@ func (s *AppStore) ListByUser(ctx context.Context, userID string) ([]*models.App
 
 	var apps []*models.App
 	for rows.Next() {
-		a := &models.App{}
-		if err := rows.Scan(
-			&a.ID, &a.UserID, &a.Name, &a.Slug, &a.Description, &a.DockerImage, &a.Status,
-			&a.Replicas, &a.CPULimit, &a.MemoryLimit, &a.Port, &a.HealthCheck, &a.CreatedAt, &a.UpdatedAt,
-		); err != nil {
+		a, err := scanApp(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan app: %w", err)
 		}
 		apps = append(apps, a)
