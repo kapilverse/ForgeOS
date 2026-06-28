@@ -28,10 +28,11 @@ var migrationsEmbed = migrationsFS.FS
 // Store is the shared access point for the database. It owns the connection
 // pool and exposes typed repositories.
 type Store struct {
-	Pool      *pgxpool.Pool
-	Users     *UserStore
-	Apps      *AppStore
-	Deploy    *DeployStore
+	Pool   *pgxpool.Pool
+	Users  *UserStore
+	Apps   *AppStore
+	Deploy *DeployStore
+	Builds *BuildStore
 }
 
 // New connects to Postgres, pings it, applies migrations, and returns a Store
@@ -68,6 +69,7 @@ func New(ctx context.Context, databaseURL string) (*Store, error) {
 	s.Users = NewUserStore(pool)
 	s.Apps = NewAppStore(pool)
 	s.Deploy = NewDeployStore(pool)
+	s.Builds = NewBuildStore(pool)
 	return s, nil
 }
 
