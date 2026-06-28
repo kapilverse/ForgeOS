@@ -16,6 +16,6 @@ RUN pip install --no-cache-dir .
 COPY . .
 
 ENV PORT={{ .Port }}
-EXPOSE {{ . Port }}
+EXPOSE {{ .Port }}
 
 CMD ["gunicorn", "--bind", "0.0.0.0:{{ .Port }}", "{{ .Entry }}"]
