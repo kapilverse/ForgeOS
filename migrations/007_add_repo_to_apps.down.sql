@@ -1,0 +1,3 @@
+ALTER TABLE apps
+    DROP COLUMN IF EXISTS branch,
+    DROP COLUMN IF EXISTS repo_url;
