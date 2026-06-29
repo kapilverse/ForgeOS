@@ -41,7 +41,7 @@ type Detection struct {
 	// Port is the best-guess listen port from the source (Dockerfile EXPOSE,
 	// etc.). 0 means "unknown" → caller falls back to the app's configured port.
 	Port int
-)
+}
 
 // ErrDetectionFailed is returned when no supported language is detected.
 var ErrDetectionFailed = errors.New("could not detect project language; add a Dockerfile")
