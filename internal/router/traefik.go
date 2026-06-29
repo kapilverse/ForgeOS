@@ -25,9 +25,10 @@ func New(domain, network string) *Traefik {
 
 // LabelConfig describes a single replica's routing.
 type LabelConfig struct {
-	Slug    string // app slug, e.g. "my-api"
-	Port    int    // container port the app listens on
-	Replica int    // 0-based replica index, used to derive a unique router name
+	Slug        string // app slug, e.g. "my-api"
+	Port        int    // container port the app listens on
+	Replica     int    // 0-based replica index, used to derive a unique router name
+	HealthCheck string // health check path (optional)
 }
 
 // Labels builds the Docker labels for one replica. Traefik's Docker provider
@@ -52,6 +53,13 @@ func (t *Traefik) Labels(cfg LabelConfig) map[string]string {
 		// Attach this replica's router to the shared service.
 		fmt.Sprintf("traefik.http.routers.%s.service", router): service,
 	}
+
+	if cfg.HealthCheck != "" {
+		labels[fmt.Sprintf("traefik.http.services.%s.loadbalancer.healthcheck.path", service)] = cfg.HealthCheck
+		labels[fmt.Sprintf("traefik.http.services.%s.loadbalancer.healthcheck.interval", service)] = "2s"
+		labels[fmt.Sprintf("traefik.http.services.%s.loadbalancer.healthcheck.timeout", service)] = "1s"
+	}
+
 	return labels
 }
 
