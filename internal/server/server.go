@@ -80,10 +80,16 @@ func New(deps Deps) *chi.Mux {
 				if deps.Deploy != nil {
 					engine = deps.Deploy
 				}
-				deployH := handlers.NewDeployHandler(deps.Store.Apps, deps.Store.Deploy, engine)
+				deployH := handlers.NewDeployHandler(deps.Store.Apps, deps.Store.Deploy, deps.Store.Builds, engine)
 				r.Post("/deploy", deployH.Deploy)
 				r.Get("/deployments", deployH.ListDeployments)
 			})
+		})
+
+		// Global deployments routes
+		deployHGlobal := handlers.NewDeployHandler(deps.Store.Apps, deps.Store.Deploy, deps.Store.Builds, nil)
+		r.Route("/deployments", func(r chi.Router) {
+			r.Get("/{id}/build", deployHGlobal.GetBuildLog)
 		})
 	})
 
