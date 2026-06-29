@@ -92,6 +92,14 @@ func New(deps Deps) *chi.Mux {
 			})
 		})
 
+		// Managed Services routes
+		r.Route("/services", func(r chi.Router) {
+			svcH := handlers.NewServiceHandler(deps.Store.Services, deps.CM)
+			r.Get("/", svcH.List)
+			r.Post("/", svcH.Create)
+			r.Delete("/{id}", svcH.Delete)
+		})
+
 		// Global deployments routes
 		deployHGlobal := handlers.NewDeployHandler(deps.Store.Apps, deps.Store.Deploy, deps.Store.Builds, nil)
 		r.Route("/deployments", func(r chi.Router) {
