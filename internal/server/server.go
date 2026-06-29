@@ -83,6 +83,7 @@ func New(deps Deps) *chi.Mux {
 				deployH := handlers.NewDeployHandler(deps.Store.Apps, deps.Store.Deploy, deps.Store.Builds, engine)
 				r.Post("/deploy", deployH.Deploy)
 				r.Get("/deployments", deployH.ListDeployments)
+				r.Post("/deployments/{dep_id}/rollback", deployH.Rollback)
 			})
 		})
 
