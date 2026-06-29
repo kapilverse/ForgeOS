@@ -134,7 +134,7 @@ func (h *DeployHandler) GetBuildLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	build, err := h.builds.GetByDeploymentID(r.Context(), deploymentID)
+	build, err := h.builds.GetByDeployment(r.Context(), deploymentID)
 	if err != nil {
 		mapStoreErr(w, err)
 		return
