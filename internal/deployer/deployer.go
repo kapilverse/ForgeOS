@@ -212,6 +212,17 @@ func (d *Deployer) startReplicas(ctx context.Context, app *models.App, deploymen
 	if replicas < 1 {
 		replicas = 1
 	}
+
+	// Fetch environment variables
+	envVars, err := d.store.Env.ListByApp(ctx, app.ID)
+	if err != nil {
+		return nil, fmt.Errorf("fetch env vars: %w", err)
+	}
+	envMap := make(map[string]string)
+	for _, v := range envVars {
+		envMap[v.Key] = v.Value
+	}
+
 	created := make([]*container.Container, 0, replicas)
 	for i := 0; i < replicas; i++ {
 		labels := d.router.Labels(router.LabelConfig{
@@ -224,7 +235,7 @@ func (d *Deployer) startReplicas(ctx context.Context, app *models.App, deploymen
 			AppID:       app.Slug,
 			Image:       imageRef,
 			Port:        app.Port,
-			EnvVars:     nil, // env-var injection arrives with the env-var sprint
+			EnvVars:     envMap,
 			MemoryLimit: app.MemoryLimit,
 			CPUShares:   app.CPULimit,
 			Labels:      labels,
