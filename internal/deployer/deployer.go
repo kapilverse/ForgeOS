@@ -287,3 +287,37 @@ func (d *Deployer) DeleteApp(ctx context.Context, app *models.App) error {
 func (d *Deployer) DeleteAppWithCtx(ctx context.Context, app *models.App) error {
 	return d.DeleteApp(ctx, app)
 }
+
+// Rollback runs a zero-downtime deployment using the image of a previous deployment.
+func (d *Deployer) Rollback(ctx context.Context, app *models.App, targetDeploymentID string) (*models.Deployment, error) {
+	// 1. Get the target deployment to find its image
+	targetDep, err := d.store.Deploy.GetDeployment(ctx, targetDeploymentID)
+	if err != nil {
+		return nil, fmt.Errorf("get target deployment: %w", err)
+	}
+
+	// Find the current live deployment to mark it as rolled back later
+	deps, err := d.store.Deploy.ListDeployments(ctx, app.ID)
+	var currentDep *models.Deployment
+	if err == nil {
+		for _, dep := range deps {
+			if dep.IsCurrent {
+				currentDep = dep
+				break
+			}
+		}
+	}
+
+	// 2. Deploy that image using the normal zero-downtime flow
+	deployment, err := d.DeployImage(ctx, app, targetDep.ImageTag)
+	if err != nil {
+		return deployment, err
+	}
+	
+	// 3. Mark the old current deployment as rolled back (best effort)
+	if currentDep != nil {
+		_ = d.store.Deploy.MarkStatus(ctx, currentDep.ID, models.DeploymentStatusRolledBack)
+	}
+
+	return deployment, nil
+}
