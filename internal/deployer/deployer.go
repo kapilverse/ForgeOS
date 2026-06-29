@@ -128,10 +128,48 @@ func (d *Deployer) DeployImage(ctx context.Context, app *models.App, imageRef st
 }
 
 func (d *Deployer) rollout(ctx context.Context, app *models.App, deployment *models.Deployment, imageRef string) error {
-	// Stop + remove any existing replicas for this app (old version).
+	// 1. Snapshot the old rows so we can remove them later
 	oldRows, _ := d.store.Deploy.ListRunningContainersByApp(ctx, app.ID)
-	if errs := d.containers.RemoveByApp(ctx, app.Slug); len(errs) > 0 {
-		// Non-fatal: we still want to bring the new version up.
+
+	// 2. Start the new replicas alongside the old ones
+	created, err := d.startReplicas(ctx, app, deployment.ID, imageRef)
+	if err != nil {
+		d.cleanupCreated(ctx, created)
+		_ = d.store.Deploy.MarkFailed(ctx, deployment.ID, err.Error())
+		_ = d.store.Apps.SetStatus(ctx, app.UserID, app.ID, models.AppStatusError)
+		return fmt.Errorf("start replicas: %w", err)
+	}
+
+	// 3. Wait for new replicas to become running and pass health checks
+	for _, c := range created {
+		if err := d.containers.WaitForRunning(ctx, c.ID, readinessTimeout); err != nil {
+			d.cleanupCreated(ctx, created)
+			_ = d.store.Deploy.MarkFailed(ctx, deployment.ID, fmt.Sprintf("replica %s not running: %v", c.Name, err))
+			_ = d.store.Apps.SetStatus(ctx, app.UserID, app.ID, models.AppStatusError)
+			return fmt.Errorf("replica readiness: %w", err)
+		}
+
+		if app.HealthCheck != "" && c.HostPort > 0 {
+			if err := WaitForHealthy(ctx, c.HostPort, app.HealthCheck, readinessTimeout); err != nil {
+				d.cleanupCreated(ctx, created)
+				_ = d.store.Deploy.MarkFailed(ctx, deployment.ID, fmt.Sprintf("replica %s health check failed: %v", c.Name, err))
+				_ = d.store.Apps.SetStatus(ctx, app.UserID, app.ID, models.AppStatusError)
+				return fmt.Errorf("replica health: %w", err)
+			}
+		}
+	}
+
+	// 4. Drain period (wait for Traefik to switch over and finish active requests to old ones)
+	if len(oldRows) > 0 {
+		time.Sleep(10 * time.Second)
+	}
+
+	// 5. Cleanup old containers
+	keepIDs := make([]string, len(created))
+	for i, c := range created {
+		keepIDs[i] = c.ID
+	}
+	if errs := d.containers.RemoveByAppExcept(ctx, app.Slug, keepIDs); len(errs) > 0 {
 		for _, e := range errs {
 			d.logger.Printf("warn: cleanup old containers app=%s: %v", app.Slug, e)
 		}
@@ -140,29 +178,7 @@ func (d *Deployer) rollout(ctx context.Context, app *models.App, deployment *mod
 		_ = d.store.Deploy.SetContainerStatus(ctx, c.ID, models.ContainerStatusStopped)
 	}
 
-	// Start the new replicas.
-	created, err := d.startReplicas(ctx, app, deployment.ID, imageRef)
-	if err != nil {
-		// Roll back the new containers and record failure; old version already
-		// gone, but at least we don't leave half-started replicas around.
-		d.cleanupCreated(ctx, created)
-		_ = d.store.Deploy.MarkFailed(ctx, deployment.ID, err.Error())
-		_ = d.store.Apps.SetStatus(ctx, app.UserID, app.ID, models.AppStatusError)
-		return fmt.Errorf("start replicas: %w", err)
-	}
-
-	// Wait for each new replica to reach "running".
-	for _, c := range created {
-		if err := d.containers.WaitForRunning(ctx, c.ID, readinessTimeout); err != nil {
-			d.cleanupCreated(ctx, created)
-			_ = d.store.Deploy.MarkFailed(ctx, deployment.ID,
-				fmt.Sprintf("replica %s not running: %v", c.Name, err))
-			_ = d.store.Apps.SetStatus(ctx, app.UserID, app.ID, models.AppStatusError)
-			return fmt.Errorf("replica readiness: %w", err)
-		}
-	}
-
-	// Persist the new container rows and flip the deployment + app to live.
+	// 6. Persist the new container rows and flip the deployment + app to live.
 	now := time.Now()
 	for i := range created {
 		c := created[i]
@@ -199,7 +215,10 @@ func (d *Deployer) startReplicas(ctx context.Context, app *models.App, deploymen
 	created := make([]*container.Container, 0, replicas)
 	for i := 0; i < replicas; i++ {
 		labels := d.router.Labels(router.LabelConfig{
-			Slug: app.Slug, Port: app.Port, Replica: i,
+			Slug:        app.Slug, 
+			Port:        app.Port, 
+			Replica:     i,
+			HealthCheck: app.HealthCheck,
 		})
 		c, err := d.containers.Create(ctx, container.ContainerConfig{
 			AppID:       app.Slug,
