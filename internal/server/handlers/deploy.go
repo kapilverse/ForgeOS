@@ -17,6 +17,7 @@ import (
 type DeployEngine interface {
 	DeployImage(ctx context.Context, app *models.App, imageRef string) (*models.Deployment, error)
 	BuildAndDeploy(ctx context.Context, app *models.App, repoURL, branch string) (*models.Deployment, error)
+	Rollback(ctx context.Context, app *models.App, targetDeploymentID string) (*models.Deployment, error)
 }
 
 // DeployHandler handles deploy + deployment-history endpoints.
@@ -141,4 +142,24 @@ func (h *DeployHandler) GetBuildLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, build)
+}
+
+// Rollback handles POST /apps/{id}/deployments/{dep_id}/rollback.
+func (h *DeployHandler) Rollback(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserFromContext(r.Context())
+	appID := chi.URLParam(r, "id")
+	deploymentID := chi.URLParam(r, "dep_id")
+
+	app, err := h.apps.GetByID(r.Context(), user.ID, appID)
+	if err != nil {
+		mapStoreErr(w, err)
+		return
+	}
+
+	deployment, err := h.engine.Rollback(r.Context(), app, deploymentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, deployment)
 }
