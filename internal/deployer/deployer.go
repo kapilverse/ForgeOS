@@ -1,12 +1,3 @@
-// Package deployer orchestrates rolling out an app image: it creates a
-// deployment record, stops any previous replicas, starts the requested number
-// of new replicas on the shared network with Traefik routing labels, waits for
-// them to reach a running state, then records them and marks the deployment
-// live. On failure the new replicas are cleaned up and the deployment is marked
-// failed, leaving any prior version untouched.
-//
-// This sprint implements a "stop old, start new" flow (no traffic overlap).
-// A true zero-downtime, health-gated rollout arrives in a later sprint.
 package deployer
 
 import (
@@ -18,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"forgeos/internal/builder"
 	"forgeos/internal/container"
 	"forgeos/internal/models"
 	"forgeos/internal/router"
@@ -33,15 +25,77 @@ type Deployer struct {
 	containers *container.Manager
 	router     *router.Traefik
 	store      *store.Store
+	builder    *builder.Builder
 	logger     *log.Logger
 }
 
 // New returns a wired Deployer.
-func New(containers *container.Manager, rt *router.Traefik, st *store.Store, logger *log.Logger) *Deployer {
+func New(containers *container.Manager, rt *router.Traefik, st *store.Store, b *builder.Builder, logger *log.Logger) *Deployer {
 	if logger == nil {
 		logger = log.Default()
 	}
-	return &Deployer{containers: containers, router: rt, store: st, logger: logger}
+	return &Deployer{containers: containers, router: rt, store: st, builder: b, logger: logger}
+}
+
+// BuildAndDeploy creates a deployment and build record, then launches a background
+// goroutine to clone, build the image, and roll it out. It returns immediately
+// with the pending deployment.
+func (d *Deployer) BuildAndDeploy(ctx context.Context, app *models.App, repoURL, branch string) (*models.Deployment, error) {
+	if repoURL == "" {
+		return nil, errors.New("repo URL is required for source deployments")
+	}
+
+	deployment, err := d.store.Deploy.CreateDeployment(ctx, app.ID, "") // ImageTag populated after build
+	if err != nil {
+		return nil, fmt.Errorf("create deployment: %w", err)
+	}
+
+	build, err := d.store.Builds.Create(ctx, deployment.ID)
+	if err != nil {
+		return nil, fmt.Errorf("create build record: %w", err)
+	}
+
+	// Update app status to indicate work is happening
+	_ = d.store.Apps.SetStatus(ctx, app.UserID, app.ID, models.AppStatusDeploying)
+
+	// Launch async build
+	go d.runBuildAndRollout(context.Background(), app, deployment, build, repoURL, branch)
+
+	return deployment, nil
+}
+
+func (d *Deployer) runBuildAndRollout(ctx context.Context, app *models.App, deployment *models.Deployment, build *models.Build, repoURL, branch string) {
+	_ = d.store.Builds.MarkStatus(ctx, build.ID, models.BuildStatusRunning)
+
+	req := builder.BuildRequest{
+		AppSlug: app.Slug,
+		Version: deployment.Version,
+		RepoURL: repoURL,
+		Branch:  branch,
+		Port:    app.Port,
+		LogSink: func(line string) {
+			_ = d.store.Builds.AppendLog(ctx, build.ID, line)
+		},
+	}
+
+	imageTag, err := d.builder.Build(ctx, req)
+	if err != nil {
+		_ = d.store.Builds.AppendLog(ctx, build.ID, fmt.Sprintf("Build failed: %v\n", err))
+		_ = d.store.Builds.MarkStatus(ctx, build.ID, models.BuildStatusFailed)
+		_ = d.store.Deploy.MarkFailed(ctx, deployment.ID, err.Error())
+		_ = d.store.Apps.SetStatus(ctx, app.UserID, app.ID, models.AppStatusError)
+		return
+	}
+
+	_ = d.store.Builds.MarkStatus(ctx, build.ID, models.BuildStatusSuccess)
+	
+	// Update deployment with the built image tag
+	_ = d.store.Deploy.UpdateImage(ctx, deployment.ID, imageTag)
+
+	// Proceed to rollout
+	if err := d.rollout(ctx, app, deployment, imageTag); err != nil {
+		d.logger.Printf("rollout failed for app=%s: %v", app.Slug, err)
+	}
 }
 
 // DeployImage rolls out an image for an app. It returns the created deployment.
@@ -61,6 +115,15 @@ func (d *Deployer) DeployImage(ctx context.Context, app *models.App, imageRef st
 	// Best-effort: mark the app as deploying so the UI reflects in-progress work.
 	_ = d.store.Apps.SetStatus(ctx, app.UserID, app.ID, models.AppStatusDeploying)
 
+	err = d.rollout(ctx, app, deployment, imageRef)
+	if err != nil {
+		return deployment, err
+	}
+	
+	return deployment, nil
+}
+
+func (d *Deployer) rollout(ctx context.Context, app *models.App, deployment *models.Deployment, imageRef string) error {
 	// Stop + remove any existing replicas for this app (old version).
 	oldRows, _ := d.store.Deploy.ListRunningContainersByApp(ctx, app.ID)
 	if errs := d.containers.RemoveByApp(ctx, app.Slug); len(errs) > 0 {
@@ -81,7 +144,7 @@ func (d *Deployer) DeployImage(ctx context.Context, app *models.App, imageRef st
 		d.cleanupCreated(ctx, created)
 		_ = d.store.Deploy.MarkFailed(ctx, deployment.ID, err.Error())
 		_ = d.store.Apps.SetStatus(ctx, app.UserID, app.ID, models.AppStatusError)
-		return deployment, fmt.Errorf("start replicas: %w", err)
+		return fmt.Errorf("start replicas: %w", err)
 	}
 
 	// Wait for each new replica to reach "running".
@@ -91,7 +154,7 @@ func (d *Deployer) DeployImage(ctx context.Context, app *models.App, imageRef st
 			_ = d.store.Deploy.MarkFailed(ctx, deployment.ID,
 				fmt.Sprintf("replica %s not running: %v", c.Name, err))
 			_ = d.store.Apps.SetStatus(ctx, app.UserID, app.ID, models.AppStatusError)
-			return deployment, fmt.Errorf("replica readiness: %w", err)
+			return fmt.Errorf("replica readiness: %w", err)
 		}
 	}
 
@@ -117,7 +180,7 @@ func (d *Deployer) DeployImage(ctx context.Context, app *models.App, imageRef st
 	}
 
 	d.logger.Printf("deploy complete app=%s version=%d replicas=%d", app.Slug, deployment.Version, len(created))
-	return deployment, nil
+	return nil
 }
 
 // startReplicas brings up the requested number of containers for the app and
