@@ -185,3 +185,27 @@ func scanContainers(rows pgx.Rows, err error) ([]*models.Container, error) {
 	}
 	return out, rows.Err()
 }
+
+// GetDeployment retrieves a deployment by ID
+func (s *DeployStore) GetDeployment(ctx context.Context, id string) (*models.Deployment, error) {
+	const q = `
+		SELECT id, app_id, version, image_tag, status, error_message,
+		       is_current, started_at, completed_at, created_at
+		FROM deployments WHERE id = $1`
+	d := &models.Deployment{}
+	err := s.pool.QueryRow(ctx, q, id).Scan(
+		&d.ID, &d.AppID, &d.Version, &d.ImageTag, &d.Status, &d.ErrorMessage,
+		&d.IsCurrent, &d.StartedAt, &d.CompletedAt, &d.CreatedAt,
+	)
+	if err != nil {
+		return nil, mapPgErr(err)
+	}
+	return d, nil
+}
+
+// UpdateImage updates the image tag for a deployment
+func (s *DeployStore) UpdateImage(ctx context.Context, id, imageTag string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE deployments SET image_tag = $2 WHERE id = $1`, id, imageTag)
+	return mapPgErr(err)
+}
+
