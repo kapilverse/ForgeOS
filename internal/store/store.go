@@ -31,9 +31,10 @@ type Store struct {
 	pool   *pgxpool.Pool
 	Users  *UserStore
 	Apps   *AppStore
-	Deploy *DeployStore
-	Builds *BuildStore
-	Env    *EnvStore
+	Deploy   *DeployStore
+	Builds   *BuildStore
+	Env      *EnvStore
+	Services *ServiceStore
 }
 
 // New connects to Postgres, pings it, applies migrations, and returns a Store
@@ -72,6 +73,7 @@ func New(ctx context.Context, databaseURL string) (*Store, error) {
 	s.Deploy = NewDeployStore(pool)
 	s.Builds = NewBuildStore(pool)
 	s.Env = NewEnvStore(pool)
+	s.Services = NewServiceStore(pool)
 	return s, nil
 }
 
