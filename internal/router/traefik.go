@@ -33,8 +33,8 @@ type LabelConfig struct {
 // Labels builds the Docker labels for one replica. Traefik's Docker provider
 // reads these and wires a Host()-based router + a load-balanced service.
 func (t *Traefik) Labels(cfg LabelConfig) map[string]string {
-	service := serviceName(cfg.Slug)             // shared across replicas -> LB
-	router := routerName(cfg.Slug, cfg.Replica)  // unique per replica
+	service := serviceName(cfg.Slug)            // shared across replicas -> LB
+	router := routerName(cfg.Slug, cfg.Replica) // unique per replica
 	host := t.host(cfg.Slug)
 
 	labels := map[string]string{

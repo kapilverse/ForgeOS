@@ -208,4 +208,3 @@ func (s *DeployStore) UpdateImage(ctx context.Context, id, imageTag string) erro
 	_, err := s.pool.Exec(ctx, `UPDATE deployments SET image_tag = $2 WHERE id = $1`, id, imageTag)
 	return mapPgErr(err)
 }
-

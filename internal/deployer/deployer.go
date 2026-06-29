@@ -92,7 +92,7 @@ func (d *Deployer) runBuildAndRollout(ctx context.Context, app *models.App, depl
 	}
 
 	_ = d.store.Builds.SetStatus(ctx, deployment.ID, models.BuildStatusSuccess)
-	
+
 	// Update deployment with the built image tag
 	_ = d.store.Deploy.UpdateImage(ctx, deployment.ID, imageTag)
 
@@ -123,7 +123,7 @@ func (d *Deployer) DeployImage(ctx context.Context, app *models.App, imageRef st
 	if err != nil {
 		return deployment, err
 	}
-	
+
 	return deployment, nil
 }
 

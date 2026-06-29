@@ -53,7 +53,7 @@ func (h *DeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 	if repoURL == "" {
 		repoURL = strings.TrimSpace(app.RepoURL)
 	}
-	
+
 	branch := strings.TrimSpace(req.Branch)
 	if branch == "" {
 		branch = strings.TrimSpace(app.Branch)
@@ -114,20 +114,20 @@ func (h *DeployHandler) GetBuildLog(w http.ResponseWriter, r *http.Request) {
 	deploymentID := chi.URLParam(r, "id")
 
 	// Verify the user owns this deployment by loading the app via the deployment.
-	// Since we don't have a GetDeployment route that returns the app ID in this handler currently, 
+	// Since we don't have a GetDeployment route that returns the app ID in this handler currently,
 	// we use a shortcut: load deployment to get app_id, verify app belongs to user.
 	// We'll rely on the DB store to do the joins or we can do it directly.
-	// A quick way is to trust the store if it had a method. For now, let's just 
-	// get the build by deployment ID. It's a slight authorization gap if we don't check the app owner, 
+	// A quick way is to trust the store if it had a method. For now, let's just
+	// get the build by deployment ID. It's a slight authorization gap if we don't check the app owner,
 	// but let's assume BuildStore's GetByDeploymentID is enough for now or we check it.
-	
-	// Better approach: verify ownership. 
+
+	// Better approach: verify ownership.
 	deployment, err := h.deploy.GetDeployment(r.Context(), deploymentID)
 	if err != nil {
 		mapStoreErr(w, err)
 		return
 	}
-	
+
 	_, err = h.apps.GetByID(r.Context(), user.ID, deployment.AppID)
 	if err != nil {
 		mapStoreErr(w, err) // This handles 404 nicely.

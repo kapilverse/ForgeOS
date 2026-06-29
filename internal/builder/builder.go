@@ -20,12 +20,12 @@ func New(docker *client.Client) *Builder {
 }
 
 type BuildRequest struct {
-	AppSlug  string
-	Version  int
-	RepoURL  string
-	Branch   string
-	Port     int
-	LogSink  LogSink
+	AppSlug string
+	Version int
+	RepoURL string
+	Branch  string
+	Port    int
+	LogSink LogSink
 }
 
 func (b *Builder) Build(ctx context.Context, req BuildRequest) (string, error) {
@@ -69,7 +69,7 @@ func (b *Builder) Build(ctx context.Context, req BuildRequest) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("generate Dockerfile: %w", err)
 		}
-		
+
 		if err := os.WriteFile(filepath.Join(tempDir, "Dockerfile"), []byte(dfContent), 0644); err != nil {
 			return "", fmt.Errorf("write Dockerfile: %w", err)
 		}
