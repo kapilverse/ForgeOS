@@ -15,6 +15,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
 
 	"forgeos/internal/models"
@@ -91,14 +92,25 @@ func (m *Manager) Create(ctx context.Context, cfg ContainerConfig) (*Container, 
 		resources.CPUShares = int64(cfg.CPUShares)
 	}
 
+	// Port binding to localhost (auto-assigned) for health checks.
+	portMap := nat.PortMap{
+		nat.Port(fmt.Sprintf("%d/tcp", cfg.Port)): []nat.PortBinding{
+			{HostIP: "127.0.0.1", HostPort: "0"},
+		},
+	}
+
 	createResp, err := m.cli.ContainerCreate(ctx,
 		&container.Config{
 			Image:  cfg.Image,
 			Env:    env,
 			Labels: cfg.Labels,
+			ExposedPorts: nat.PortSet{
+				nat.Port(fmt.Sprintf("%d/tcp", cfg.Port)): struct{}{},
+			},
 		},
 		&container.HostConfig{
 			Resources: resources,
+			PortBindings: portMap,
 			RestartPolicy: container.RestartPolicy{
 				Name:              container.RestartPolicyOnFailure,
 				MaximumRetryCount: 3,
