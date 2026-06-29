@@ -215,8 +215,8 @@ func (d *Deployer) startReplicas(ctx context.Context, app *models.App, deploymen
 	created := make([]*container.Container, 0, replicas)
 	for i := 0; i < replicas; i++ {
 		labels := d.router.Labels(router.LabelConfig{
-			Slug:        app.Slug, 
-			Port:        app.Port, 
+			Slug:        app.Slug,
+			Port:        app.Port,
 			Replica:     i,
 			HealthCheck: app.HealthCheck,
 		})
@@ -313,7 +313,7 @@ func (d *Deployer) Rollback(ctx context.Context, app *models.App, targetDeployme
 	if err != nil {
 		return deployment, err
 	}
-	
+
 	// 3. Mark the old current deployment as rolled back (best effort)
 	if currentDep != nil {
 		_ = d.store.Deploy.MarkStatus(ctx, currentDep.ID, models.DeploymentStatusRolledBack)

@@ -109,7 +109,7 @@ func (m *Manager) Create(ctx context.Context, cfg ContainerConfig) (*Container, 
 			},
 		},
 		&container.HostConfig{
-			Resources: resources,
+			Resources:    resources,
 			PortBindings: portMap,
 			RestartPolicy: container.RestartPolicy{
 				Name:              container.RestartPolicyOnFailure,

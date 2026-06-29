@@ -14,7 +14,7 @@ func WaitForHealthy(ctx context.Context, hostPort int, path string, timeout time
 		// If no health path is provided, we just assume it's healthy once it starts.
 		return nil
 	}
-	
+
 	// Ensure path starts with /
 	if path[0] != '/' {
 		path = "/" + path
