@@ -84,6 +84,11 @@ func New(deps Deps) *chi.Mux {
 				r.Post("/deploy", deployH.Deploy)
 				r.Get("/deployments", deployH.ListDeployments)
 				r.Post("/deployments/{dep_id}/rollback", deployH.Rollback)
+
+				// Env sub-routes
+				envH := handlers.NewEnvHandler(deps.Store.Apps, deps.Store.Env)
+				r.Get("/env", envH.List)
+				r.Put("/env", envH.ReplaceAll)
 			})
 		})
 
