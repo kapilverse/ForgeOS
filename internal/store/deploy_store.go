@@ -88,6 +88,12 @@ func (s *DeployStore) MarkFailed(ctx context.Context, deploymentID, errMsg strin
 	return mapPgErr(err)
 }
 
+// MarkStatus simply updates the status of a deployment.
+func (s *DeployStore) MarkStatus(ctx context.Context, deploymentID, status string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE deployments SET status = $2 WHERE id = $1`, deploymentID, status)
+	return mapPgErr(err)
+}
+
 // ListDeployments returns all deployments for an app, newest version first.
 func (s *DeployStore) ListDeployments(ctx context.Context, appID string) ([]*models.Deployment, error) {
 	const q = `
