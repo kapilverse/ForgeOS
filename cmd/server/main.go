@@ -20,6 +20,7 @@ import (
 
 	"github.com/docker/docker/api/types/network"
 
+	"forgeos/internal/builder"
 	"forgeos/internal/config"
 	"forgeos/internal/container"
 	"forgeos/internal/deployer"
@@ -67,8 +68,11 @@ func run() error {
 	// --- Traefik label generator ------------------------------------------
 	rt := router.New(cfg.ForgeOSDomain, cfg.DockerNetwork)
 
+	// --- Builder -----------------------------------------------------------
+	b := builder.New(cm.Client())
+
 	// --- Deployer ----------------------------------------------------------
-	dep := deployer.New(cm, rt, db, log.Default())
+	dep := deployer.New(cm, rt, db, b, log.Default())
 
 	// --- HTTP server -------------------------------------------------------
 	srvDeps := server.Deps{
