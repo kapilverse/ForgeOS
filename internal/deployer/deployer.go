@@ -50,8 +50,12 @@ func (d *Deployer) BuildAndDeploy(ctx context.Context, app *models.App, repoURL,
 		return nil, fmt.Errorf("create deployment: %w", err)
 	}
 
-	build, err := d.store.Builds.Create(ctx, deployment.ID)
-	if err != nil {
+	b := &models.Build{
+		ID:           uuid.NewString(),
+		DeploymentID: deployment.ID,
+		Status:       models.BuildStatusPending,
+	}
+	if err := d.store.Builds.Create(ctx, b); err != nil {
 		return nil, fmt.Errorf("create build record: %w", err)
 	}
 
@@ -59,13 +63,13 @@ func (d *Deployer) BuildAndDeploy(ctx context.Context, app *models.App, repoURL,
 	_ = d.store.Apps.SetStatus(ctx, app.UserID, app.ID, models.AppStatusDeploying)
 
 	// Launch async build
-	go d.runBuildAndRollout(context.Background(), app, deployment, build, repoURL, branch)
+	go d.runBuildAndRollout(context.Background(), app, deployment, repoURL, branch)
 
 	return deployment, nil
 }
 
-func (d *Deployer) runBuildAndRollout(ctx context.Context, app *models.App, deployment *models.Deployment, build *models.Build, repoURL, branch string) {
-	_ = d.store.Builds.MarkStatus(ctx, build.ID, models.BuildStatusRunning)
+func (d *Deployer) runBuildAndRollout(ctx context.Context, app *models.App, deployment *models.Deployment, repoURL, branch string) {
+	_ = d.store.Builds.SetStatus(ctx, deployment.ID, models.BuildStatusRunning)
 
 	req := builder.BuildRequest{
 		AppSlug: app.Slug,
@@ -74,20 +78,20 @@ func (d *Deployer) runBuildAndRollout(ctx context.Context, app *models.App, depl
 		Branch:  branch,
 		Port:    app.Port,
 		LogSink: func(line string) {
-			_ = d.store.Builds.AppendLog(ctx, build.ID, line)
+			_ = d.store.Builds.AppendLog(ctx, deployment.ID, line)
 		},
 	}
 
 	imageTag, err := d.builder.Build(ctx, req)
 	if err != nil {
-		_ = d.store.Builds.AppendLog(ctx, build.ID, fmt.Sprintf("Build failed: %v\n", err))
-		_ = d.store.Builds.MarkStatus(ctx, build.ID, models.BuildStatusFailed)
+		_ = d.store.Builds.AppendLog(ctx, deployment.ID, fmt.Sprintf("Build failed: %v\n", err))
+		_ = d.store.Builds.SetStatus(ctx, deployment.ID, models.BuildStatusFailed)
 		_ = d.store.Deploy.MarkFailed(ctx, deployment.ID, err.Error())
 		_ = d.store.Apps.SetStatus(ctx, app.UserID, app.ID, models.AppStatusError)
 		return
 	}
 
-	_ = d.store.Builds.MarkStatus(ctx, build.ID, models.BuildStatusSuccess)
+	_ = d.store.Builds.SetStatus(ctx, deployment.ID, models.BuildStatusSuccess)
 	
 	// Update deployment with the built image tag
 	_ = d.store.Deploy.UpdateImage(ctx, deployment.ID, imageTag)
