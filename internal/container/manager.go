@@ -193,15 +193,27 @@ func (m *Manager) ListByApp(ctx context.Context, appSlug string, runningOnly boo
 }
 
 // RemoveByApp stops and removes every container ForgeOS manages for an app.
-// Used during delete and full redeploys. Errors are collected, not fatal: we
-// want to clean up as much as possible.
 func (m *Manager) RemoveByApp(ctx context.Context, appSlug string) []error {
+	return m.RemoveByAppExcept(ctx, appSlug, nil)
+}
+
+// RemoveByAppExcept stops and removes every container for an app EXCEPT the specified IDs.
+func (m *Manager) RemoveByAppExcept(ctx context.Context, appSlug string, keepIDs []string) []error {
 	ids, err := m.ListByApp(ctx, appSlug, false)
 	if err != nil {
 		return []error{err}
 	}
+
+	keepMap := make(map[string]bool)
+	for _, id := range keepIDs {
+		keepMap[id] = true
+	}
+
 	var errs []error
 	for _, id := range ids {
+		if keepMap[id] {
+			continue
+		}
 		if err := m.Stop(ctx, id, 10); err != nil {
 			errs = append(errs, err)
 		}
